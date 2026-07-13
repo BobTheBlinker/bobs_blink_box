@@ -172,7 +172,7 @@ class BlinkBoxTUI:
         self.lines(y, [
             "Application installation and repair live in launcher.sh.",
             "Commands: install, update, repair, uninstall, and nuke.",
-            "Builds and releases are preserved during normal uninstall.",
+            "Your ~/Android workspace is preserved during normal uninstall.",
         ], width)
 
     def draw_sync(self, y: int, rows: int, width: int) -> None:
@@ -187,14 +187,18 @@ class BlinkBoxTUI:
         del rows
         y = self.heading(y, "BUILD")
         self.lines(y, [
-            f"Default build root: {self.config.build_root}",
-            "Recovery and ROM build workflows will be added as modules.",
+            f"Android root: {self.config.android_root}",
+            f"ROM sources: {self.config.roms_root}",
+            f"Recovery sources: {self.config.recoveries_root}",
+            "Each source tree keeps its own build output directory.",
         ], width)
 
     def draw_tools(self, y: int, rows: int, width: int) -> None:
         del rows
         y = self.heading(y, "TOOLS")
         self.lines(y, [
+            f"Tool storage: {self.config.tools_root}",
+            "",
             "R  Refresh connected-device status",
             "",
             *tool_status(),
@@ -208,7 +212,7 @@ class BlinkBoxTUI:
         del rows
         y = self.heading(y, "RELEASES")
         self.lines(y, [
-            f"Default release root: {self.config.release_root}",
+            f"Release root: {self.config.releases_root}",
             "Packaging, checksums, and release indexing will live here.",
         ], width)
 

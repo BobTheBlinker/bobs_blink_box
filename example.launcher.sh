@@ -9,8 +9,13 @@ MAINTAINER_NAME="Your Name"
 GIT_USERNAME="your-git-username"
 GIT_EMAIL="you@example.com"
 
-DEFAULT_BUILD_ROOT="$HOME/builds"
-DEFAULT_RELEASE_ROOT="$HOME/releases"
+# Main Android workspace. The folders below are created automatically.
+ANDROID_ROOT="$HOME/Android"
+ROMS_ROOT="$ANDROID_ROOT/ROMs"
+RECOVERIES_ROOT="$ANDROID_ROOT/Recoveries"
+TOOLS_ROOT="$ANDROID_ROOT/Tools"
+RELEASES_ROOT="$ANDROID_ROOT/Releases"
+
 DEFAULT_EDITOR="nano"
 REMOTE_HOST=""
 
@@ -88,14 +93,18 @@ app_installed() {
 }
 
 write_runtime_config() {
-    mkdir -p "$CONFIG_DIR" "$STATE_DIR" "$DEFAULT_BUILD_ROOT" "$DEFAULT_RELEASE_ROOT"
+    mkdir -p "$CONFIG_DIR" "$STATE_DIR" \
+        "$ANDROID_ROOT" "$ROMS_ROOT" "$RECOVERIES_ROOT" "$TOOLS_ROOT" "$RELEASES_ROOT"
     umask 077
     cat > "$CONFIG_DIR/user.env" <<CFG
 BLINKBOX_MAINTAINER_NAME=$(printf '%q' "$MAINTAINER_NAME")
 BLINKBOX_GIT_USERNAME=$(printf '%q' "$GIT_USERNAME")
 BLINKBOX_GIT_EMAIL=$(printf '%q' "$GIT_EMAIL")
-BLINKBOX_BUILD_ROOT=$(printf '%q' "$DEFAULT_BUILD_ROOT")
-BLINKBOX_RELEASE_ROOT=$(printf '%q' "$DEFAULT_RELEASE_ROOT")
+BLINKBOX_ANDROID_ROOT=$(printf '%q' "$ANDROID_ROOT")
+BLINKBOX_ROMS_ROOT=$(printf '%q' "$ROMS_ROOT")
+BLINKBOX_RECOVERIES_ROOT=$(printf '%q' "$RECOVERIES_ROOT")
+BLINKBOX_TOOLS_ROOT=$(printf '%q' "$TOOLS_ROOT")
+BLINKBOX_RELEASES_ROOT=$(printf '%q' "$RELEASES_ROOT")
 BLINKBOX_EDITOR=$(printf '%q' "$DEFAULT_EDITOR")
 BLINKBOX_REMOTE_HOST=$(printf '%q' "$REMOTE_HOST")
 BLINKBOX_CONFIG_DIR=$(printf '%q' "$CONFIG_DIR")
@@ -170,7 +179,7 @@ repair_app() {
 
 uninstall_app() {
     app_installed || die "Blink Box is not installed."
-    warn "This removes the cloned application but leaves your builds, releases, and launcher settings alone."
+    warn "This removes the cloned application but leaves your entire Android workspace and launcher settings alone."
     confirm "Remove $APP_DIR?" || exit 0
     rm -rf "$APP_DIR"
     say "Application removed."
@@ -178,7 +187,7 @@ uninstall_app() {
 
 nuke_app() {
     warn "This removes the cloned application, generated config, and Blink Box state."
-    warn "Build and release directories are intentionally preserved."
+    warn "The Android workspace under $ANDROID_ROOT is intentionally preserved."
     confirm "Remove Blink Box application data?" || exit 0
     rm -rf "$APP_ROOT" "$CONFIG_DIR" "$STATE_DIR"
     say "Blink Box application data removed."
@@ -193,8 +202,11 @@ Git identity:   $GIT_USERNAME <$GIT_EMAIL>
 Repository:     $BLINKBOX_REPO_URL
 Branch:         $BLINKBOX_BRANCH
 Application:    $APP_DIR
-Build root:     $DEFAULT_BUILD_ROOT
-Release root:   $DEFAULT_RELEASE_ROOT
+Android root:   $ANDROID_ROOT
+ROMs:           $ROMS_ROOT
+Recoveries:     $RECOVERIES_ROOT
+Tools:          $TOOLS_ROOT
+Releases:       $RELEASES_ROOT
 Remote host:    ${REMOTE_HOST:-not configured}
 Platform:       $(is_termux && echo Termux || echo Linux)
 Auto-update:    $AUTO_UPDATE
