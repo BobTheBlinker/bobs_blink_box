@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bobs-blink-box"
+version = "0.1.0"
+description = "Headless-first Android build and device toolbox for Linux, SSH, and Termux"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.scripts]
+blinkbox-python = "blinkbox.app:main"
+
+[tool.setuptools.packages.find]
+include = ["blinkbox*"]
