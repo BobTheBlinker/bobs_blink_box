@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 # ============================================================================
-# Bob's Blink Box - Personal Launcher
+# BOB's Blink Box - Personal Launcher
 # Edit this section per user. Do not put passwords, tokens, or private keys here.
 # ============================================================================
 MAINTAINER_NAME="Your Name"
