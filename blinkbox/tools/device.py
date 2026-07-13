@@ -3,50 +3,53 @@ from __future__ import annotations
 from dataclasses import dataclass
 import shutil
 import subprocess
-from typing import Iterable
+from typing import Sequence
 
 
 @dataclass(frozen=True)
-class DeviceLine:
+class Device:
     transport: str
     serial: str
     state: str
 
 
-def _run(command: Iterable[str]) -> subprocess.CompletedProcess[str]:
+def _run(command: Sequence[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        list(command),
+        command,
         check=False,
         capture_output=True,
         text=True,
-        timeout=8,
+        timeout=15,
     )
 
 
-def scan_devices() -> list[DeviceLine]:
-    found: list[DeviceLine] = []
+def scan_devices() -> list[Device]:
+    devices: list[Device] = []
 
     if shutil.which("adb"):
         result = _run(["adb", "devices"])
         for line in result.stdout.splitlines()[1:]:
-            fields = line.strip().split()
+            fields = line.split()
             if len(fields) >= 2:
-                found.append(DeviceLine("adb", fields[0], fields[1]))
+                devices.append(Device("adb", fields[0], fields[1]))
 
     if shutil.which("fastboot"):
         result = _run(["fastboot", "devices"])
         for line in result.stdout.splitlines():
-            fields = line.strip().split()
+            fields = line.split()
             if fields:
                 state = fields[1] if len(fields) > 1 else "fastboot"
-                found.append(DeviceLine("fastboot", fields[0], state))
+                devices.append(Device("fastboot", fields[0], state))
 
-    return found
+    return devices
 
 
-def tool_status() -> list[str]:
-    lines = []
-    for tool in ("adb", "fastboot", "git", "ssh"):
-        path = shutil.which(tool)
-        lines.append(f"{tool:<10} {'available' if path else 'missing'}{f'  {path}' if path else ''}")
-    return lines
+def format_devices() -> str:
+    devices = scan_devices()
+    if not devices:
+        return "No ADB or fastboot devices detected."
+
+    width = max(len(item.transport) for item in devices)
+    return "\n".join(
+        f"{item.transport:<{width}}  {item.serial}  {item.state}" for item in devices
+    )

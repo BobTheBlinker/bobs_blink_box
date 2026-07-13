@@ -1,3 +1,3 @@
-"""Bob's Blink Box terminal application."""
+"""Bob's Blink Box."""
 
 __version__ = "0.1.0"

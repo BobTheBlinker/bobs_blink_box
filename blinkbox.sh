@@ -1,15 +1,13 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# ============================================================================
-# BOB's Blink Box - Personal Launcher
-# Edit this section per user. Do not put passwords, tokens, or private keys here.
-# ============================================================================
-MAINTAINER_NAME="Your Name"
-GIT_USERNAME="your-git-username"
-GIT_EMAIL="you@example.com"
+# =============================================================================
+# Bob's Blink Box - user settings
+# =============================================================================
+MAINTAINER_NAME="BOBtheBlinker"
+GIT_USERNAME="BOBtheBlinker"
+GIT_EMAIL="BOBtheBlinker@gMail.com"
 
-# Main Android workspace. The folders below are created automatically.
 ANDROID_ROOT="$HOME/Android"
 ROMS_ROOT="$ANDROID_ROOT/ROMs"
 RECOVERIES_ROOT="$ANDROID_ROOT/Recoveries"
@@ -19,21 +17,38 @@ RELEASES_ROOT="$ANDROID_ROOT/Releases"
 DEFAULT_EDITOR="nano"
 REMOTE_HOST=""
 
-# Public application repository. Cloning and updates require no GitHub account.
 BLINKBOX_REPO_URL="https://github.com/BobTheBlinker/bobs_blink_box.git"
 BLINKBOX_BRANCH="main"
-
-# never | ask | always
-AUTO_UPDATE="ask"
-# ============================================================================
+AUTO_UPDATE="ask" # never | ask | always
+# =============================================================================
 
 APP_ROOT="${BLINKBOX_APP_ROOT:-$HOME/.local/share/blinkbox}"
 APP_DIR="$APP_ROOT/app"
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/blinkbox"
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/blinkbox"
 
+on_error() {
+    local status=$?
+    printf '\nERROR: Blink Box stopped at line %s while running:\n  %s\n' \
+        "${BASH_LINENO[0]:-unknown}" "${BASH_COMMAND:-unknown}" >&2
+    printf 'Exit status: %s\n' "$status" >&2
+    exit "$status"
+}
+trap on_error ERR
+
+say()  { printf '\n%s\n' "$*"; }
+warn() { printf '\nWARNING: %s\n' "$*" >&2; }
+die()  { printf '\nERROR: %s\n' "$*" >&2; exit 1; }
+
+confirm() {
+    local prompt="${1:-Continue?}" answer
+    [[ -t 0 ]] || return 1
+    read -r -p "$prompt [y/N] " answer || return 1
+    [[ "$answer" =~ ^[Yy]([Ee][Ss])?$ ]]
+}
+
 is_termux() {
-    [[ -n "${TERMUX_VERSION:-}" || -d "/data/data/com.termux/files/usr" ]]
+    [[ -n "${TERMUX_VERSION:-}" || -d /data/data/com.termux/files/usr ]]
 }
 
 python_cmd() {
@@ -46,46 +61,29 @@ python_cmd() {
     fi
 }
 
-say()   { printf '\n%s\n' "$*"; }
-warn()  { printf '\nWARNING: %s\n' "$*" >&2; }
-die()   { printf '\nERROR: %s\n' "$*" >&2; exit 1; }
-
-confirm() {
-    local prompt="${1:-Continue?}"
-    local answer
-    read -r -p "$prompt [y/N] " answer || true
-    [[ "$answer" =~ ^[Yy]([Ee][Ss])?$ ]]
-}
-
 install_dependencies() {
-    local missing=()
-    command -v git >/dev/null 2>&1 || missing+=(git)
-    python_cmd >/dev/null 2>&1 || missing+=(python)
+    local need_git=0 need_python=0
+    command -v git >/dev/null 2>&1 || need_git=1
+    python_cmd >/dev/null 2>&1 || need_python=1
+    (( need_git == 0 && need_python == 0 )) && return 0
 
-    ((${#missing[@]} == 0)) && return 0
-
-    warn "Missing required programs: ${missing[*]}"
-    confirm "Install the required packages now?" || die "Cannot continue without Git and Python."
+    warn "Git and Python 3 are required."
+    confirm "Install the missing packages now?" || die "Install Git and Python 3, then rerun Blink Box."
 
     if is_termux; then
         pkg update
-        pkg install -y git python ncurses-utils
+        pkg install -y git python
     elif command -v apt-get >/dev/null 2>&1; then
-        command -v sudo >/dev/null 2>&1 || die "sudo is required for apt package installation."
+        command -v sudo >/dev/null 2>&1 || die "sudo is required to install packages."
         sudo apt-get update
-        sudo apt-get install -y git python3 python3-venv
+        sudo apt-get install -y git python3
     elif command -v dnf >/dev/null 2>&1; then
         sudo dnf install -y git python3
     elif command -v pacman >/dev/null 2>&1; then
         sudo pacman -S --needed git python
     else
-        die "Unsupported package manager. Install Git and Python 3 manually, then rerun this launcher."
+        die "Unsupported package manager. Install Git and Python 3 manually."
     fi
-}
-
-validate_repo_url() {
-    [[ "$BLINKBOX_REPO_URL" != *"CHANGE-ME"* ]] || die \
-        "Set BLINKBOX_REPO_URL near the top of this launcher before installing."
 }
 
 app_installed() {
@@ -94,57 +92,54 @@ app_installed() {
 
 write_runtime_config() {
     mkdir -p "$CONFIG_DIR" "$STATE_DIR" \
-        "$ANDROID_ROOT" "$ROMS_ROOT" "$RECOVERIES_ROOT" "$TOOLS_ROOT" "$RELEASES_ROOT"
+        "$ANDROID_ROOT" "$ROMS_ROOT" "$RECOVERIES_ROOT" \
+        "$TOOLS_ROOT" "$RELEASES_ROOT"
+
     umask 077
-    cat > "$CONFIG_DIR/user.env" <<CFG
-BLINKBOX_MAINTAINER_NAME=$(printf '%q' "$MAINTAINER_NAME")
-BLINKBOX_GIT_USERNAME=$(printf '%q' "$GIT_USERNAME")
-BLINKBOX_GIT_EMAIL=$(printf '%q' "$GIT_EMAIL")
-BLINKBOX_ANDROID_ROOT=$(printf '%q' "$ANDROID_ROOT")
-BLINKBOX_ROMS_ROOT=$(printf '%q' "$ROMS_ROOT")
-BLINKBOX_RECOVERIES_ROOT=$(printf '%q' "$RECOVERIES_ROOT")
-BLINKBOX_TOOLS_ROOT=$(printf '%q' "$TOOLS_ROOT")
-BLINKBOX_RELEASES_ROOT=$(printf '%q' "$RELEASES_ROOT")
-BLINKBOX_EDITOR=$(printf '%q' "$DEFAULT_EDITOR")
-BLINKBOX_REMOTE_HOST=$(printf '%q' "$REMOTE_HOST")
-BLINKBOX_CONFIG_DIR=$(printf '%q' "$CONFIG_DIR")
-BLINKBOX_STATE_DIR=$(printf '%q' "$STATE_DIR")
-CFG
+    {
+        printf 'BLINKBOX_MAINTAINER_NAME=%q\n' "$MAINTAINER_NAME"
+        printf 'BLINKBOX_GIT_USERNAME=%q\n' "$GIT_USERNAME"
+        printf 'BLINKBOX_GIT_EMAIL=%q\n' "$GIT_EMAIL"
+        printf 'BLINKBOX_ANDROID_ROOT=%q\n' "$ANDROID_ROOT"
+        printf 'BLINKBOX_ROMS_ROOT=%q\n' "$ROMS_ROOT"
+        printf 'BLINKBOX_RECOVERIES_ROOT=%q\n' "$RECOVERIES_ROOT"
+        printf 'BLINKBOX_TOOLS_ROOT=%q\n' "$TOOLS_ROOT"
+        printf 'BLINKBOX_RELEASES_ROOT=%q\n' "$RELEASES_ROOT"
+        printf 'BLINKBOX_DEFAULT_EDITOR=%q\n' "$DEFAULT_EDITOR"
+        printf 'BLINKBOX_REMOTE_HOST=%q\n' "$REMOTE_HOST"
+    } > "$CONFIG_DIR/user.env"
 }
 
 install_app() {
-    validate_repo_url
     install_dependencies
+    app_installed && die "Blink Box is already installed at $APP_DIR"
+
+    local tmp_dir="$APP_ROOT/app.tmp.$$"
+    rm -rf "$tmp_dir"
     mkdir -p "$APP_ROOT"
 
-    if [[ -e "$APP_DIR" ]]; then
-        die "$APP_DIR already exists but is not a valid Blink Box clone. Move or remove it first."
+    say "Cloning Bob's Blink Box..."
+    if ! git clone --depth 1 --branch "$BLINKBOX_BRANCH" --single-branch \
+        "$BLINKBOX_REPO_URL" "$tmp_dir"; then
+        rm -rf "$tmp_dir"
+        die "Git clone failed. The application was not installed."
     fi
 
-    say "Cloning Bob's Blink Box..."
-    git clone --branch "$BLINKBOX_BRANCH" --single-branch "$BLINKBOX_REPO_URL" "$APP_DIR"
+    [[ -f "$tmp_dir/blinkbox/__main__.py" ]] || {
+        rm -rf "$tmp_dir"
+        die "The cloned repository is missing blinkbox/__main__.py"
+    }
+
+    rm -rf "$APP_DIR"
+    mv "$tmp_dir" "$APP_DIR"
     write_runtime_config
-    say "Installed in $APP_DIR"
+    say "Blink Box installed successfully."
 }
 
 update_app() {
     app_installed || die "Blink Box is not installed."
-    validate_repo_url
-
-    say "Checking for updates..."
-    git -C "$APP_DIR" fetch origin "$BLINKBOX_BRANCH"
-
-    local local_rev remote_rev
-    local_rev="$(git -C "$APP_DIR" rev-parse HEAD)"
-    remote_rev="$(git -C "$APP_DIR" rev-parse "origin/$BLINKBOX_BRANCH")"
-
-    if [[ "$local_rev" == "$remote_rev" ]]; then
-        say "Blink Box is already current."
-        return 0
-    fi
-
+    say "Updating Blink Box..."
     git -C "$APP_DIR" pull --ff-only origin "$BLINKBOX_BRANCH"
-    say "Blink Box updated."
 }
 
 maybe_update() {
@@ -153,23 +148,23 @@ maybe_update() {
         never) return 0 ;;
         always) update_app ;;
         ask)
-            if git -C "$APP_DIR" fetch --quiet origin "$BLINKBOX_BRANCH" 2>/dev/null; then
-                local local_rev remote_rev
-                local_rev="$(git -C "$APP_DIR" rev-parse HEAD)"
-                remote_rev="$(git -C "$APP_DIR" rev-parse "origin/$BLINKBOX_BRANCH")"
-                if [[ "$local_rev" != "$remote_rev" ]] && confirm "A Blink Box update is available. Install it?"; then
-                    git -C "$APP_DIR" pull --ff-only origin "$BLINKBOX_BRANCH"
-                fi
+            git -C "$APP_DIR" fetch -q origin "$BLINKBOX_BRANCH" || {
+                warn "Could not check for updates; launching the installed copy."
+                return 0
+            }
+            local current remote
+            current="$(git -C "$APP_DIR" rev-parse HEAD)"
+            remote="$(git -C "$APP_DIR" rev-parse "origin/$BLINKBOX_BRANCH")"
+            if [[ "$current" != "$remote" ]] && confirm "A Blink Box update is available. Install it?"; then
+                update_app
             fi
             ;;
-        *) warn "Invalid AUTO_UPDATE value '$AUTO_UPDATE'; using 'ask'." ;;
+        *) warn "Invalid AUTO_UPDATE='$AUTO_UPDATE'; skipping update check." ;;
     esac
 }
 
 repair_app() {
     app_installed || die "Blink Box is not installed."
-    install_dependencies
-    say "Repairing the application checkout..."
     git -C "$APP_DIR" fetch origin "$BLINKBOX_BRANCH"
     git -C "$APP_DIR" reset --hard "origin/$BLINKBOX_BRANCH"
     git -C "$APP_DIR" clean -fd
@@ -177,45 +172,8 @@ repair_app() {
     say "Repair complete."
 }
 
-uninstall_app() {
-    app_installed || die "Blink Box is not installed."
-    warn "This removes the cloned application but leaves your entire Android workspace and launcher settings alone."
-    confirm "Remove $APP_DIR?" || exit 0
-    rm -rf "$APP_DIR"
-    say "Application removed."
-}
-
-nuke_app() {
-    warn "This removes the cloned application, generated config, and Blink Box state."
-    warn "The Android workspace under $ANDROID_ROOT is intentionally preserved."
-    confirm "Remove Blink Box application data?" || exit 0
-    rm -rf "$APP_ROOT" "$CONFIG_DIR" "$STATE_DIR"
-    say "Blink Box application data removed."
-}
-
-show_config() {
-    cat <<CFG
-Bob's Blink Box launcher configuration
-
-Maintainer:     $MAINTAINER_NAME
-Git identity:   $GIT_USERNAME <$GIT_EMAIL>
-Repository:     $BLINKBOX_REPO_URL
-Branch:         $BLINKBOX_BRANCH
-Application:    $APP_DIR
-Android root:   $ANDROID_ROOT
-ROMs:           $ROMS_ROOT
-Recoveries:     $RECOVERIES_ROOT
-Tools:          $TOOLS_ROOT
-Releases:       $RELEASES_ROOT
-Remote host:    ${REMOTE_HOST:-not configured}
-Platform:       $(is_termux && echo Termux || echo Linux)
-Auto-update:    $AUTO_UPDATE
-CFG
-}
-
 run_app() {
     install_dependencies
-
     if ! app_installed; then
         say "Bob's Blink Box is not installed."
         confirm "Clone and install it now?" || exit 0
@@ -237,33 +195,63 @@ run_app() {
     exec "$py" -m blinkbox "$@"
 }
 
+show_config() {
+    cat <<EOF_CONFIG
+Repository:      $BLINKBOX_REPO_URL
+Branch:          $BLINKBOX_BRANCH
+Application:     $APP_DIR
+Android root:    $ANDROID_ROOT
+ROMs:            $ROMS_ROOT
+Recoveries:      $RECOVERIES_ROOT
+Tools:           $TOOLS_ROOT
+Releases:        $RELEASES_ROOT
+Remote host:     ${REMOTE_HOST:-not configured}
+Platform:        $(is_termux && echo Termux || echo Linux)
+Auto-update:     $AUTO_UPDATE
+EOF_CONFIG
+}
+
+uninstall_app() {
+    warn "This removes only the cloned application. Your ~/Android workspace stays intact."
+    confirm "Remove $APP_DIR?" || exit 0
+    rm -rf "$APP_DIR"
+    say "Application removed."
+}
+
+nuke_app() {
+    warn "This removes Blink Box application/config/state data, but preserves $ANDROID_ROOT."
+    confirm "Remove Blink Box application data?" || exit 0
+    rm -rf "$APP_ROOT" "$CONFIG_DIR" "$STATE_DIR"
+    say "Blink Box application data removed."
+}
+
 usage() {
-    cat <<'USAGE'
-Usage: launcher.sh [command]
+    cat <<'EOF_USAGE'
+Usage: blinkbox [command]
 
 Commands:
-  run         Install if needed, optionally update, and launch the TUI
-  install     Clone the application repository
-  update      Fast-forward the installed application
-  repair      Reset the application checkout to the configured branch
-  uninstall   Remove only the cloned application
-  nuke        Remove application, generated config, and state
-  config      Show the active launcher configuration
-  help        Show this help
-USAGE
+  run        Install if needed, update if requested, and launch
+  install    Clone the application
+  update     Fast-forward the installed application
+  repair     Reset the installed checkout to origin/main
+  uninstall  Remove only the installed application
+  nuke       Remove application, generated config, and state
+  config     Show active paths and settings
+  help       Show this help
+EOF_USAGE
 }
 
 command="${1:-run}"
 [[ $# -gt 0 ]] && shift
 
 case "$command" in
-    run)       run_app "$@" ;;
-    install)   install_app ;;
-    update)    update_app ;;
-    repair)    repair_app ;;
+    run) run_app "$@" ;;
+    install) install_app ;;
+    update) update_app ;;
+    repair) repair_app ;;
     uninstall) uninstall_app ;;
-    nuke)      nuke_app ;;
-    config)    show_config ;;
+    nuke) nuke_app ;;
+    config) show_config ;;
     help|-h|--help) usage ;;
     *) die "Unknown command '$command'. Run '$0 help'." ;;
 esac

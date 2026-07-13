@@ -2,46 +2,49 @@ from __future__ import annotations
 
 import argparse
 import curses
-import os
 import sys
 
-from blinkbox.config import UserConfig
-from blinkbox.tools.device import scan_devices
-from blinkbox.ui.tui import BlinkBoxTUI
+from blinkbox import __version__
+from blinkbox.config import load_settings
+from blinkbox.tools.device import format_devices
+from blinkbox.ui.tui import run_tui
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="blinkbox")
+    parser.add_argument("--version", action="version", version=__version__)
     subparsers = parser.add_subparsers(dest="command")
-    subparsers.add_parser("tui", help="Launch the interactive terminal interface")
-    subparsers.add_parser("devices", help="List connected ADB and fastboot devices")
+    subparsers.add_parser("devices", help="list connected ADB and fastboot devices")
+    subparsers.add_parser("config", help="print active workspace settings")
     return parser
 
 
-def run_devices() -> int:
-    devices = scan_devices()
-    if not devices:
-        print("No ADB or fastboot devices detected.")
-        return 1
-    for device in devices:
-        print(f"{device.transport}\t{device.serial}\t{device.state}")
-    return 0
-
-
-def run_tui(config: UserConfig) -> int:
-    if not sys.stdin.isatty() or not sys.stdout.isatty():
-        print("The TUI requires an interactive terminal. Try: ssh -t host blinkbox", file=sys.stderr)
-        return 2
-    os.environ.setdefault("ESCDELAY", "25")
-    curses.wrapper(lambda screen: BlinkBoxTUI(screen, config).run())
-    return 0
+def print_config() -> None:
+    settings = load_settings()
+    print(f"Maintainer: {settings.maintainer_name}")
+    print(f"Android root: {settings.android_root}")
+    print(f"ROMs: {settings.roms_root}")
+    print(f"Recoveries: {settings.recoveries_root}")
+    print(f"Tools: {settings.tools_root}")
+    print(f"Releases: {settings.releases_root}")
+    print(f"Platform: {'Termux' if settings.is_termux else 'Linux'}")
+    print(f"Remote host: {settings.remote_host or 'not configured'}")
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = build_parser()
-    args = parser.parse_args(argv)
-    config = UserConfig.from_environment()
+    args = build_parser().parse_args(argv)
 
     if args.command == "devices":
-        return run_devices()
-    return run_tui(config)
+        print(format_devices())
+        return 0
+    if args.command == "config":
+        print_config()
+        return 0
+
+    settings = load_settings()
+    try:
+        return run_tui(settings)
+    except (curses.error, OSError) as exc:
+        print(f"Unable to start the full-screen interface: {exc}", file=sys.stderr)
+        print("Try: blinkbox run config", file=sys.stderr)
+        return 1

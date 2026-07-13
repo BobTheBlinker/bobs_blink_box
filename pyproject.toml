@@ -5,8 +5,10 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "bobs-blink-box"
 version = "0.1.0"
-description = "Headless-first Android build and device toolbox for Linux, SSH, and Termux"
+description = "Headless-first Android build and device toolbox"
 requires-python = ">=3.10"
+authors = [{name = "BOBtheBlinker", email = "BOBtheBlinker@gMail.com"}]
+license = {text = "MIT"}
 dependencies = []
 
 [project.scripts]

@@ -1,249 +1,132 @@
 from __future__ import annotations
 
 import curses
-from dataclasses import dataclass
-from typing import Callable
+import textwrap
 
-from blinkbox import __version__
-from blinkbox.config import UserConfig
-from blinkbox.tools.device import scan_devices, tool_status
-from blinkbox.ui.logo import LOGO
+from blinkbox.config import Settings
+from blinkbox.tools.device import format_devices
+from blinkbox.ui.logo import COMPACT_LOGO, LOGO
+
+MENU = ("HOME", "INSTALL", "SYNC", "BUILD", "TOOLS", "RELEASES", "SETTINGS", "ABOUT")
+
+PAGE_TEXT = {
+    "HOME": "Headless-first Android building and device toolbox. Linux, SSH, and Termux are first-class targets.",
+    "INSTALL": "Install, update, repair, and remove toolbox-managed components. The Android workspace is never removed automatically.",
+    "SYNC": "ROM, recovery, manifest, device-tree, kernel, and vendor synchronization will live here.",
+    "BUILD": "ROM and recovery build orchestration will live here. Source trees remain under ~/Android.",
+    "TOOLS": "Device scanner is active. Copy Partitions A → B is the next major tool and remains disabled until its safety checks are complete.",
+    "RELEASES": "Finished ZIPs, images, checksums, and release notes will be organized under ~/Android/Releases.",
+    "SETTINGS": "User-adjustable identity and path settings come from blinkbox.sh, keeping the Python package generic.",
+    "ABOUT": "Bob's Blink Box v0.1.0. Built for terminals first, shiny windows later.",
+}
 
 
-@dataclass(frozen=True)
-class Page:
-    title: str
-    draw: Callable[["BlinkBoxTUI", int, int, int], None]
+def _safe_addstr(window: curses.window, y: int, x: int, text: str, attr: int = 0) -> None:
+    height, width = window.getmaxyx()
+    if y < 0 or y >= height or x >= width:
+        return
+    clipped = text[: max(0, width - x - 1)]
+    try:
+        window.addstr(y, x, clipped, attr)
+    except curses.error:
+        pass
 
 
-class BlinkBoxTUI:
-    def __init__(self, screen: "curses._CursesWindow", config: UserConfig) -> None:
-        self.screen = screen
-        self.config = config
-        self.selected = 0
-        self.active = 0
-        self.status = "Arrow keys move. Enter opens. Esc returns home. Q quits."
-        self.pages = [
-            Page("HOME", BlinkBoxTUI.draw_home),
-            Page("INSTALL", BlinkBoxTUI.draw_install),
-            Page("SYNC", BlinkBoxTUI.draw_sync),
-            Page("BUILD", BlinkBoxTUI.draw_build),
-            Page("TOOLS", BlinkBoxTUI.draw_tools),
-            Page("RELEASES", BlinkBoxTUI.draw_releases),
-            Page("SETTINGS", BlinkBoxTUI.draw_settings),
-            Page("ABOUT", BlinkBoxTUI.draw_about),
-        ]
+def _center(window: curses.window, y: int, text: str, attr: int = 0) -> None:
+    _, width = window.getmaxyx()
+    _safe_addstr(window, y, max(0, (width - len(text)) // 2), text, attr)
 
-    def run(self) -> None:
-        curses.curs_set(0)
-        self.screen.keypad(True)
-        self.screen.timeout(-1)
 
-        if curses.has_colors():
-            curses.start_color()
-            curses.use_default_colors()
-            curses.init_pair(1, curses.COLOR_CYAN, -1)
-            curses.init_pair(2, curses.COLOR_BLACK, curses.COLOR_CYAN)
-            curses.init_pair(3, curses.COLOR_YELLOW, -1)
+def _draw_menu(window: curses.window, selected: int, y: int) -> int:
+    _, width = window.getmaxyx()
+    labels = [f" {name} " for name in MENU]
+    total = sum(len(label) for label in labels) + len(labels) - 1
 
-        while True:
-            self.draw()
-            key = self.screen.getch()
-            if key in (ord("q"), ord("Q")):
-                return
-            if key in (curses.KEY_LEFT, ord("h"), ord("H")):
-                self.selected = (self.selected - 1) % len(self.pages)
-            elif key in (curses.KEY_RIGHT, ord("l"), ord("L"), 9):
-                self.selected = (self.selected + 1) % len(self.pages)
-            elif key in (10, 13, curses.KEY_ENTER):
-                self.active = self.selected
-            elif key in (27, curses.KEY_BACKSPACE, 127):
-                self.active = 0
-                self.selected = 0
-            elif key == curses.KEY_RESIZE:
-                continue
-            elif key in (ord("r"), ord("R")) and self.pages[self.active].title == "TOOLS":
-                self.status = self.device_summary()
-
-    def dimensions(self) -> tuple[int, int, int]:
-        rows, cols = self.screen.getmaxyx()
-        if cols > rows and cols >= 80:
-            width = max(44, cols // 2)
-        else:
-            width = cols
-        return rows, cols, min(width, cols)
-
-    def safe_add(self, y: int, x: int, text: str, attr: int = 0, width: int | None = None) -> None:
-        rows, cols = self.screen.getmaxyx()
-        if y < 0 or y >= rows or x < 0 or x >= cols:
-            return
-        allowed = cols - x - 1
-        if width is not None:
-            allowed = min(allowed, width)
-        if allowed <= 0:
-            return
-        try:
-            self.screen.addnstr(y, x, text, allowed, attr)
-        except curses.error:
-            pass
-
-    def draw(self) -> None:
-        self.screen.erase()
-        rows, _, width = self.dimensions()
-        if rows < 12 or width < 32:
-            self.safe_add(0, 0, "Terminal too small. Rotate or enlarge it.", curses.A_BOLD)
-            self.safe_add(2, 0, f"Current usable area: {width}x{rows}")
-            self.safe_add(rows - 1, 0, "Q quits")
-            self.screen.refresh()
-            return
-
-        if self.active == 0:
-            self.draw_home_screen(rows, width)
-        else:
-            body_top = self.draw_top_menu(width)
-            self.pages[self.active].draw(self, body_top, rows, width)
-
-        self.draw_footer(rows, width)
-        self.screen.refresh()
-
-    def draw_home_screen(self, rows: int, width: int) -> None:
-        logo_width = max(len(line) for line in LOGO)
-        if width >= logo_width + 2 and rows >= len(LOGO) + 8:
-            y = 1
-            x = max(0, (width - logo_width) // 2)
-            for line in LOGO:
-                self.safe_add(y, x, line, curses.color_pair(1) | curses.A_BOLD, width - x)
-                y += 1
-            self.safe_add(y + 1, 2, f"Maintainer: {self.config.maintainer_name}", curses.A_BOLD)
-            self.safe_add(y + 2, 2, f"Blink Box v{__version__}")
-            menu_y = y + 4
-        else:
-            self.safe_add(1, 2, "BOB'S BLINK BOX", curses.color_pair(1) | curses.A_BOLD)
-            self.safe_add(2, 2, f"Maintainer: {self.config.maintainer_name}")
-            menu_y = 4
-
-        self.draw_menu(menu_y, width)
-        self.safe_add(menu_y + 3, 2, "Select a section and press Enter.")
-
-    def draw_top_menu(self, width: int) -> int:
-        self.draw_menu(0, width)
-        self.safe_add(2, 0, "─" * max(0, width - 1))
-        return 4
-
-    def draw_menu(self, y: int, width: int) -> None:
-        labels = [page.title for page in self.pages]
-        total = sum(len(label) + 3 for label in labels)
-
-        if total <= width - 2:
-            x = 1
-            for index, label in enumerate(labels):
-                text = f" {label} "
-                attr = curses.color_pair(2) | curses.A_BOLD if index == self.selected else curses.A_BOLD
-                self.safe_add(y, x, text, attr)
-                x += len(text) + 1
-            return
-
-        # Narrow phone layout: show a compact three-item carousel.
-        previous_index = (self.selected - 1) % len(labels)
-        next_index = (self.selected + 1) % len(labels)
-        compact = f"‹ {labels[previous_index]}   [ {labels[self.selected]} ]   {labels[next_index]} ›"
-        x = max(0, (width - len(compact)) // 2)
-        self.safe_add(y, x, compact, curses.color_pair(1) | curses.A_BOLD, width - x)
-
-    def draw_footer(self, rows: int, width: int) -> None:
-        self.safe_add(rows - 2, 0, "─" * max(0, width - 1))
-        self.safe_add(rows - 1, 1, self.status, curses.color_pair(3), width - 2)
-
-    def heading(self, y: int, title: str) -> int:
-        self.safe_add(y, 2, title, curses.color_pair(1) | curses.A_BOLD)
+    if total < width:
+        x = max(0, (width - total) // 2)
+        for index, label in enumerate(labels):
+            attr = curses.A_REVERSE | curses.A_BOLD if index == selected else curses.A_NORMAL
+            _safe_addstr(window, y, x, label, attr)
+            x += len(label) + 1
         return y + 2
 
-    def lines(self, y: int, lines: list[str], width: int) -> None:
+    x = 1
+    row = y
+    for index, label in enumerate(labels):
+        if x + len(label) >= width:
+            row += 1
+            x = 1
+        attr = curses.A_REVERSE | curses.A_BOLD if index == selected else curses.A_NORMAL
+        _safe_addstr(window, row, x, label, attr)
+        x += len(label) + 1
+    return row + 2
+
+
+def _draw_logo(window: curses.window, start_y: int) -> int:
+    _, width = window.getmaxyx()
+    logo = LOGO if width >= max(map(len, LOGO)) + 2 else COMPACT_LOGO
+    for offset, line in enumerate(logo):
+        _center(window, start_y + offset, line, curses.A_BOLD)
+    return start_y + len(logo) + 1
+
+
+def _draw_page(window: curses.window, settings: Settings, selected: int) -> None:
+    height, width = window.getmaxyx()
+    window.erase()
+    page = MENU[selected]
+
+    if page == "HOME":
+        y = _draw_logo(window, 1)
+        y = _draw_menu(window, selected, y)
+    else:
+        y = _draw_menu(window, selected, 0)
+        _center(window, y, page, curses.A_BOLD | curses.A_UNDERLINE)
+        y += 2
+
+    body_width = max(20, width - 4)
+    text = PAGE_TEXT[page]
+    if page == "TOOLS":
+        text += "\n\nConnected devices:\n" + format_devices()
+    elif page == "SETTINGS":
+        text += (
+            f"\n\nMaintainer: {settings.maintainer_name}"
+            f"\nAndroid root: {settings.android_root}"
+            f"\nROMs: {settings.roms_root}"
+            f"\nRecoveries: {settings.recoveries_root}"
+            f"\nTools: {settings.tools_root}"
+            f"\nReleases: {settings.releases_root}"
+            f"\nPlatform: {'Termux' if settings.is_termux else 'Linux'}"
+            f"\nRemote host: {settings.remote_host or 'not configured'}"
+        )
+
+    for paragraph in text.splitlines():
+        lines = textwrap.wrap(paragraph, body_width) or [""]
         for line in lines:
-            self.safe_add(y, 4, line, width=width - 6)
+            if y >= height - 2:
+                break
+            _safe_addstr(window, y, 2, line)
             y += 1
 
-    def draw_home(self, y: int, rows: int, width: int) -> None:
-        del y, rows, width
+    _safe_addstr(window, height - 1, 1, "←/→ menu  Enter select  r refresh  q quit", curses.A_DIM)
+    window.refresh()
 
-    def draw_install(self, y: int, rows: int, width: int) -> None:
-        del rows
-        y = self.heading(y, "INSTALL")
-        self.lines(y, [
-            "Application installation and repair live in launcher.sh.",
-            "Commands: install, update, repair, uninstall, and nuke.",
-            "Your ~/Android workspace is preserved during normal uninstall.",
-        ], width)
 
-    def draw_sync(self, y: int, rows: int, width: int) -> None:
-        del rows
-        y = self.heading(y, "SYNC")
-        self.lines(y, [
-            "Repository and manifest synchronization will live here.",
-            "The implementation will remain usable from SSH and Termux.",
-        ], width)
+def run_tui(settings: Settings) -> int:
+    def _main(window: curses.window) -> int:
+        curses.curs_set(0)
+        window.keypad(True)
+        selected = 0
 
-    def draw_build(self, y: int, rows: int, width: int) -> None:
-        del rows
-        y = self.heading(y, "BUILD")
-        self.lines(y, [
-            f"Android root: {self.config.android_root}",
-            f"ROM sources: {self.config.roms_root}",
-            f"Recovery sources: {self.config.recoveries_root}",
-            "Each source tree keeps its own build output directory.",
-        ], width)
+        while True:
+            _draw_page(window, settings, selected)
+            key = window.getch()
+            if key in (ord("q"), 27):
+                return 0
+            if key in (curses.KEY_LEFT, ord("h")):
+                selected = (selected - 1) % len(MENU)
+            elif key in (curses.KEY_RIGHT, ord("l"), 9):
+                selected = (selected + 1) % len(MENU)
+            elif key in (curses.KEY_RESIZE, ord("r"), 10, 13, curses.KEY_ENTER):
+                continue
 
-    def draw_tools(self, y: int, rows: int, width: int) -> None:
-        del rows
-        y = self.heading(y, "TOOLS")
-        self.lines(y, [
-            f"Tool storage: {self.config.tools_root}",
-            "",
-            "R  Refresh connected-device status",
-            "",
-            *tool_status(),
-            "",
-            self.device_summary(),
-            "",
-            "Planned: Copy A-slot partitions to B-slot partitions.",
-        ], width)
-
-    def draw_releases(self, y: int, rows: int, width: int) -> None:
-        del rows
-        y = self.heading(y, "RELEASES")
-        self.lines(y, [
-            f"Release root: {self.config.releases_root}",
-            "Packaging, checksums, and release indexing will live here.",
-        ], width)
-
-    def draw_settings(self, y: int, rows: int, width: int) -> None:
-        del rows
-        y = self.heading(y, "SETTINGS")
-        self.lines(y, [
-            f"Maintainer:  {self.config.maintainer_name}",
-            f"Git user:    {self.config.git_username}",
-            f"Git email:   {self.config.git_email}",
-            f"Editor:      {self.config.editor}",
-            f"Remote host: {self.config.remote_host or 'not configured'}",
-            "",
-            "Edit frequently changed values near the top of launcher.sh.",
-        ], width)
-
-    def draw_about(self, y: int, rows: int, width: int) -> None:
-        del rows
-        y = self.heading(y, "ABOUT")
-        self.lines(y, [
-            f"Bob's Blink Box v{__version__}",
-            "Headless-first Android build and device toolbox.",
-            "Targets: Linux, SSH sessions, and Termux.",
-        ], width)
-
-    @staticmethod
-    def device_summary() -> str:
-        try:
-            devices = scan_devices()
-        except Exception as exc:  # Defensive UI boundary.
-            return f"Device scan failed: {exc}"
-        if not devices:
-            return "No ADB or fastboot devices detected."
-        return " | ".join(f"{d.transport}:{d.serial} ({d.state})" for d in devices)
+    return curses.wrapper(_main)

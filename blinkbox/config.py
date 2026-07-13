@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 @dataclass(frozen=True)
-class UserConfig:
+class Settings:
     maintainer_name: str
     git_username: str
     git_email: str
@@ -15,44 +15,29 @@ class UserConfig:
     recoveries_root: Path
     tools_root: Path
     releases_root: Path
-    editor: str
+    default_editor: str
     remote_host: str
-    config_dir: Path
-    state_dir: Path
+    is_termux: bool
 
-    @classmethod
-    def from_environment(cls) -> "UserConfig":
-        home = Path.home()
-        android_root = Path(
-            os.getenv("BLINKBOX_ANDROID_ROOT", str(home / "Android"))
-        ).expanduser()
 
-        return cls(
-            maintainer_name=os.getenv("BLINKBOX_MAINTAINER_NAME", "Unknown Maintainer"),
-            git_username=os.getenv("BLINKBOX_GIT_USERNAME", ""),
-            git_email=os.getenv("BLINKBOX_GIT_EMAIL", ""),
-            android_root=android_root,
-            roms_root=Path(
-                os.getenv("BLINKBOX_ROMS_ROOT", str(android_root / "ROMs"))
-            ).expanduser(),
-            recoveries_root=Path(
-                os.getenv("BLINKBOX_RECOVERIES_ROOT", str(android_root / "Recoveries"))
-            ).expanduser(),
-            tools_root=Path(
-                os.getenv("BLINKBOX_TOOLS_ROOT", str(android_root / "Tools"))
-            ).expanduser(),
-            releases_root=Path(
-                os.getenv(
-                    "BLINKBOX_RELEASES_ROOT",
-                    os.getenv("BLINKBOX_RELEASE_ROOT", str(android_root / "Releases")),
-                )
-            ).expanduser(),
-            editor=os.getenv("BLINKBOX_EDITOR", "nano"),
-            remote_host=os.getenv("BLINKBOX_REMOTE_HOST", ""),
-            config_dir=Path(
-                os.getenv("BLINKBOX_CONFIG_DIR", str(home / ".config/blinkbox"))
-            ).expanduser(),
-            state_dir=Path(
-                os.getenv("BLINKBOX_STATE_DIR", str(home / ".local/state/blinkbox"))
-            ).expanduser(),
-        )
+def _path(name: str, fallback: Path) -> Path:
+    return Path(os.environ.get(name, str(fallback))).expanduser()
+
+
+def load_settings() -> Settings:
+    home = Path.home()
+    android_root = _path("BLINKBOX_ANDROID_ROOT", home / "Android")
+    return Settings(
+        maintainer_name=os.environ.get("BLINKBOX_MAINTAINER_NAME", "Unknown maintainer"),
+        git_username=os.environ.get("BLINKBOX_GIT_USERNAME", ""),
+        git_email=os.environ.get("BLINKBOX_GIT_EMAIL", ""),
+        android_root=android_root,
+        roms_root=_path("BLINKBOX_ROMS_ROOT", android_root / "ROMs"),
+        recoveries_root=_path("BLINKBOX_RECOVERIES_ROOT", android_root / "Recoveries"),
+        tools_root=_path("BLINKBOX_TOOLS_ROOT", android_root / "Tools"),
+        releases_root=_path("BLINKBOX_RELEASES_ROOT", android_root / "Releases"),
+        default_editor=os.environ.get("BLINKBOX_DEFAULT_EDITOR", "nano"),
+        remote_host=os.environ.get("BLINKBOX_REMOTE_HOST", ""),
+        is_termux=bool(os.environ.get("TERMUX_VERSION"))
+        or Path("/data/data/com.termux/files/usr").is_dir(),
+    )
