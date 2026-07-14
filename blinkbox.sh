@@ -20,6 +20,10 @@ REMOTE_HOST=""
 BLINKBOX_REPO_URL="https://github.com/BobTheBlinker/bobs_blink_box.git"
 BLINKBOX_BRANCH="main"
 AUTO_UPDATE="ask" # never | ask | always
+
+# Desktop window behavior. Termux and SSH sessions always keep the full current terminal.
+DESKTOP_WINDOW_MODE="auto" # auto | left-half | keep
+DESKTOP_WIDTH_PERCENT="50" # 25-100; used for local graphical Linux only
 # =============================================================================
 
 APP_ROOT="${BLINKBOX_APP_ROOT:-$HOME/.local/share/blinkbox}"
@@ -51,6 +55,97 @@ is_termux() {
     [[ -n "${TERMUX_VERSION:-}" || -d /data/data/com.termux/files/usr ]]
 }
 
+is_ssh_session() {
+    [[ -n "${SSH_CONNECTION:-}${SSH_CLIENT:-}${SSH_TTY:-}" ]]
+}
+
+primary_monitor_geometry() {
+    local line
+
+    if command -v xrandr >/dev/null 2>&1; then
+        line="$(xrandr --listactivemonitors 2>/dev/null | awk '/\+\*/ {print; exit}')"
+        [[ -n "$line" ]] || line="$(xrandr --listactivemonitors 2>/dev/null | awk 'NR == 2 {print; exit}')"
+
+        if [[ "$line" =~ ([0-9]+)/[0-9]+x([0-9]+)/[0-9]+\+([0-9]+)\+([0-9]+) ]]; then
+            printf '%s %s %s %s\n' \
+                "${BASH_REMATCH[3]}" "${BASH_REMATCH[4]}" \
+                "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"
+            return 0
+        fi
+    fi
+
+    # Single-display fallback using the current desktop work area.
+    if command -v wmctrl >/dev/null 2>&1; then
+        line="$(wmctrl -d 2>/dev/null | awk '$2 == "*" {print; exit}')"
+        if [[ "$line" =~ WA:\ ([0-9]+),([0-9]+)\ ([0-9]+)x([0-9]+) ]]; then
+            printf '%s %s %s %s\n' \
+                "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" \
+                "${BASH_REMATCH[3]}" "${BASH_REMATCH[4]}"
+            return 0
+        fi
+    fi
+
+    return 1
+}
+
+maybe_resize_desktop_window() {
+    [[ $# -eq 0 ]] || return 0
+
+    case "$DESKTOP_WINDOW_MODE" in
+        keep|off|never) return 0 ;;
+        auto|left-half) ;;
+        *)
+            warn "Invalid DESKTOP_WINDOW_MODE='$DESKTOP_WINDOW_MODE'; keeping the current window size."
+            return 0
+            ;;
+    esac
+
+    # A terminal app cannot reposition the Termux app itself, and a remote process
+    # must never try to manipulate the user's local SSH terminal window.
+    is_termux && return 0
+    is_ssh_session && return 0
+    [[ -t 1 && -n "${DISPLAY:-}" ]] || return 0
+
+    local percent="$DESKTOP_WIDTH_PERCENT"
+    [[ "$percent" =~ ^[0-9]+$ ]] || percent=50
+    (( percent < 25 )) && percent=25
+    (( percent > 100 )) && percent=100
+
+    if ! command -v wmctrl >/dev/null 2>&1; then
+        local marker="$STATE_DIR/window-helper-warning-shown"
+        if [[ ! -e "$marker" ]]; then
+            warn "Install 'wmctrl' to let Blink Box tile this terminal on the left side. Continuing full-size."
+            mkdir -p "$STATE_DIR"
+            : > "$marker"
+        fi
+        return 0
+    fi
+
+    local x y width height
+    if ! read -r x y width height < <(primary_monitor_geometry); then
+        return 0
+    fi
+
+    # In auto mode, only tile displays that are actually landscape.
+    if [[ "$DESKTOP_WINDOW_MODE" == "auto" ]] && (( width <= height )); then
+        return 0
+    fi
+
+    local target_width=$(( width * percent / 100 ))
+    (( target_width > 0 )) || return 0
+
+    # Remove maximization first, then place the active terminal on the left side
+    # of the primary monitor. Window managers may reserve a few pixels for panels
+    # and decorations, which they will correct automatically.
+    wmctrl -r :ACTIVE: -b remove,maximized_vert,maximized_horz >/dev/null 2>&1 || true
+    sleep 0.05
+    if wmctrl -r :ACTIVE: -e "0,$x,$y,$target_width,$height" >/dev/null 2>&1; then
+        sleep 0.15
+    else
+        warn "The desktop/window manager refused automatic tiling; using the current terminal size."
+    fi
+}
+
 python_cmd() {
     if command -v python3 >/dev/null 2>&1; then
         printf '%s\n' python3
@@ -61,28 +156,83 @@ python_cmd() {
     fi
 }
 
+desktop_window_helper_required() {
+    case "$DESKTOP_WINDOW_MODE" in
+        auto|left-half) ;;
+        keep|off|never) return 1 ;;
+        *) return 1 ;;
+    esac
+
+    is_termux && return 1
+    is_ssh_session && return 1
+    [[ -n "${DISPLAY:-}" ]] || return 1
+    return 0
+}
+
+run_as_root() {
+    if (( EUID == 0 )); then
+        "$@"
+    elif command -v sudo >/dev/null 2>&1; then
+        sudo "$@"
+    else
+        die "Root privileges are required to install packages. Install sudo or run the package command manually."
+    fi
+}
+
 install_dependencies() {
-    local need_git=0 need_python=0
+    local need_git=0 need_python=0 need_wmctrl=0
+    local -a missing=() packages=()
+
     command -v git >/dev/null 2>&1 || need_git=1
     python_cmd >/dev/null 2>&1 || need_python=1
-    (( need_git == 0 && need_python == 0 )) && return 0
 
-    warn "Git and Python 3 are required."
-    confirm "Install the missing packages now?" || die "Install Git and Python 3, then rerun Blink Box."
+    # wmctrl is a desktop-only helper. Termux and SSH sessions intentionally
+    # use the full terminal and therefore never install or require it.
+    if desktop_window_helper_required && ! command -v wmctrl >/dev/null 2>&1; then
+        need_wmctrl=1
+    fi
+
+    (( need_git == 1 )) && missing+=(git)
+    (( need_python == 1 )) && missing+=(python3)
+    (( need_wmctrl == 1 )) && missing+=(wmctrl)
+    ((${#missing[@]} == 0)) && return 0
+
+    warn "Missing Blink Box dependencies: ${missing[*]}"
+    confirm "Install the missing packages now?" ||         die "Install the missing dependencies, then rerun Blink Box."
 
     if is_termux; then
+        (( need_git == 1 )) && packages+=(git)
+        (( need_python == 1 )) && packages+=(python)
+
+        # wmctrl is deliberately absent here because an Android app cannot use
+        # it to resize the Termux window.
+        ((${#packages[@]} > 0)) || return 0
         pkg update
-        pkg install -y git python
+        pkg install -y "${packages[@]}"
     elif command -v apt-get >/dev/null 2>&1; then
-        command -v sudo >/dev/null 2>&1 || die "sudo is required to install packages."
-        sudo apt-get update
-        sudo apt-get install -y git python3
+        (( need_git == 1 )) && packages+=(git)
+        (( need_python == 1 )) && packages+=(python3)
+        (( need_wmctrl == 1 )) && packages+=(wmctrl)
+        run_as_root apt-get update
+        run_as_root apt-get install -y "${packages[@]}"
     elif command -v dnf >/dev/null 2>&1; then
-        sudo dnf install -y git python3
+        (( need_git == 1 )) && packages+=(git)
+        (( need_python == 1 )) && packages+=(python3)
+        (( need_wmctrl == 1 )) && packages+=(wmctrl)
+        run_as_root dnf install -y "${packages[@]}"
     elif command -v pacman >/dev/null 2>&1; then
-        sudo pacman -S --needed git python
+        (( need_git == 1 )) && packages+=(git)
+        (( need_python == 1 )) && packages+=(python)
+        (( need_wmctrl == 1 )) && packages+=(wmctrl)
+        run_as_root pacman -S --needed --noconfirm "${packages[@]}"
     else
-        die "Unsupported package manager. Install Git and Python 3 manually."
+        die "Unsupported package manager. Install these packages manually: ${missing[*]}"
+    fi
+
+    command -v git >/dev/null 2>&1 || die "Git is still unavailable after package installation."
+    python_cmd >/dev/null 2>&1 || die "Python 3 is still unavailable after package installation."
+    if desktop_window_helper_required; then
+        command -v wmctrl >/dev/null 2>&1 ||             die "wmctrl is still unavailable after package installation."
     fi
 }
 
@@ -107,6 +257,8 @@ write_runtime_config() {
         printf 'BLINKBOX_RELEASES_ROOT=%q\n' "$RELEASES_ROOT"
         printf 'BLINKBOX_DEFAULT_EDITOR=%q\n' "$DEFAULT_EDITOR"
         printf 'BLINKBOX_REMOTE_HOST=%q\n' "$REMOTE_HOST"
+        printf 'BLINKBOX_DESKTOP_WINDOW_MODE=%q\n' "$DESKTOP_WINDOW_MODE"
+        printf 'BLINKBOX_DESKTOP_WIDTH_PERCENT=%q\n' "$DESKTOP_WIDTH_PERCENT"
     } > "$CONFIG_DIR/user.env"
 }
 
@@ -192,6 +344,7 @@ run_app() {
     set +a
 
     export PYTHONPATH="$APP_DIR${PYTHONPATH:+:$PYTHONPATH}"
+    maybe_resize_desktop_window "$@"
     exec "$py" -m blinkbox "$@"
 }
 
@@ -208,6 +361,8 @@ Releases:        $RELEASES_ROOT
 Remote host:     ${REMOTE_HOST:-not configured}
 Platform:        $(is_termux && echo Termux || echo Linux)
 Auto-update:     $AUTO_UPDATE
+Window mode:     $DESKTOP_WINDOW_MODE
+Desktop width:   $DESKTOP_WIDTH_PERCENT%
 EOF_CONFIG
 }
 
@@ -252,6 +407,7 @@ case "$command" in
     uninstall) uninstall_app ;;
     nuke) nuke_app ;;
     config) show_config ;;
-    help|-h|--help) usage ;;
+    version|-V|--version) run_app --version ;;
+  help|-h|--help) usage ;;
     *) die "Unknown command '$command'. Run '$0 help'." ;;
 esac
